@@ -1,0 +1,7 @@
+{
+  "client_id": "PASTE_CLIENT_ID",
+  "client_secret": "PASTE_CLIENT_SECRET",
+  "refresh_token": "PASTE_REFRESH_TOKEN",
+  "folder_in": "PASTE_FOLDER_IN",
+  "folder_out": "PASTE_FOLDER_OUT"
+}

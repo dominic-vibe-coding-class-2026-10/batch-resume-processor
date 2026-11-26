@@ -43,7 +43,7 @@ try {
   config = JSON.parse(await readFile(configPath, 'utf8'));
 } catch (error) {
   if (error.code === 'ENOENT') {
-    console.error('Copy n8n-resume-processor/config.example.json to n8n-resume-processor/config.json and set client_id and client_secret.');
+    console.error('Copy config-template.json to config.json and set client_id and client_secret.');
     process.exit(1);
   }
   throw error;
@@ -121,5 +121,5 @@ const refreshToken = await exchangeAuthCode({
 
 const next = withRefreshToken(config, refreshToken);
 await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`);
-console.log('Saved refresh_token to n8n-resume-processor/config.json');
-console.log('Add folder_in and folder_out if they are empty, then run node n8n-resume-processor/scripts/apply-config.mjs');
+console.log('Saved refresh_token to config.json');
+console.log('Add folder_in and folder_out if they are empty, then run node scripts/apply-config.mjs');

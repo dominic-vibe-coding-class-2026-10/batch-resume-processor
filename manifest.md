@@ -2,11 +2,11 @@
 
 Follow this file from top to bottom. It is the build, the import, and the proof that a run uploaded `result.txt`. Do not commit secrets, and do not print refresh tokens, client secrets, access tokens, or API keys.
 
-If `n8n-resume-processor/` already exists and `node --test n8n-resume-processor/scripts/test.mjs` passes, skip to [Deploy and prove it](#deploy-and-prove-it). Otherwise build the tree below first.
+Paths below are relative to the folder that contains this file. If `lib/` and `workflows/batch-resume-processor.json` already exist and `node --test scripts/test.mjs` passes, skip to [Deploy and prove it](#deploy-and-prove-it). Otherwise build the tree below first.
 
 ## What done looks like
 
-- `node --test n8n-resume-processor/scripts/test.mjs` passes.
+- `node --test scripts/test.mjs` passes.
 - n8n has an inactive workflow named **Batch Resume Processor**.
 - Its **Config** node holds the five values below. Google is called with HTTP Request nodes. There is no Google Drive credential in n8n.
 - **Ollama Chat Model** uses the existing Ollama credential and model `kimi-k3.1-pro`.
@@ -28,15 +28,14 @@ FOLDER_IN: ""             # Drive folder id, not the folder URL
 FOLDER_OUT: ""
 ```
 
-Keep these in `n8n-resume-processor/config.json` for the Google fields and the two folder ids. That file is gitignored. `workflows/*.local.json` is gitignored too.
+Copy `config-template.json` to `config.json` and replace every `PASTE_` value. `config.json` is gitignored. `workflows/*.local.json` is gitignored too. The Google fields and the two folder ids live in `config.json`.
 
 ## Repo to build
 
 ```
-n8n-resume-processor/
   manifest.md
   README.md
-  config.example.json
+  config-template.json
   lib/check-config.mjs
   lib/collect-files.mjs
   lib/resume-report.mjs
@@ -50,23 +49,13 @@ n8n-resume-processor/
   workflows/batch-resume-processor.json    # generated, secrets empty
 ```
 
-`config.example.json` is:
-
-```json
-{
-  "client_id": "",
-  "client_secret": "",
-  "refresh_token": "",
-  "folder_in": "",
-  "folder_out": ""
-}
-```
+`config-template.json` uses `PASTE_` placeholders. `checkConfig` rejects those until a person replaces them.
 
 Generate the workflow JSON from the script. Do not hand-edit it. After any lib change, run the build script and the tests.
 
 ```bash
-node n8n-resume-processor/scripts/build-workflow.mjs
-node --test n8n-resume-processor/scripts/test.mjs
+node scripts/build-workflow.mjs
+node --test scripts/test.mjs
 ```
 
 ## Behaviour to implement
