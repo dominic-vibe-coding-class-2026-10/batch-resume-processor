@@ -1,0 +1,878 @@
+{
+  "name": "Batch Resume Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Setup\nPaste the five values into **Config**, or import `batch-resume-processor.local.json` from `scripts/apply-config.mjs`.\n\nThe refresh token needs the scope `https://www.googleapis.com/auth/drive`. `drive.file` cannot see PDFs already in the folder.\n\n`folder_in` and `folder_out` are folder ids, the segment after `/folders/` in the Drive URL. Each run creates a new `result.txt` in the output folder. An access token lasts about one hour.",
+        "width": 1880,
+        "height": 340,
+        "color": 4
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000001",
+      "name": "Note: Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## One PDF at a time\n**Loop Over Items** (batch size 1) downloads a PDF, extracts its text, and asks the Ollama agent for Name, Education, and Working experience.\n\nConnect **Shape Result** and **Skipped Resume** back into **Loop Over Items**. The top output of the loop fires after every file has been sent back.\n\nImage-only PDFs and download errors are recorded in the report. The other files still run.",
+        "width": 2280,
+        "height": 280,
+        "color": 5
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000002",
+      "name": "Note: Loop",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1880,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Ollama\nSelect the existing **Ollama account** credential.\n\nModel: `kimi-k3.1-pro`. Context length is 8192 tokens. Raise **Context Length** on this node for a very long resume.\n\nIf n8n is in Docker and Ollama is on the host, set the credential base URL to `http://host.docker.internal:11434`.",
+        "width": 420,
+        "height": 260,
+        "color": 6
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000003",
+      "name": "Note: Ollama",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3320,
+        1280
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## result.txt\n**Convert to File** writes the report as `result.txt`. Drive's multipart upload also needs a JSON metadata part, which **Build Multipart Upload** adds around that same text.\n\nThe POST goes to `uploadType=multipart` with the access token from the start of the run. No Google Drive credential is stored in n8n.",
+        "width": 1680,
+        "height": 200,
+        "color": 3
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000004",
+      "name": "Note: Upload",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2100,
+        1560
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b1e0a001-0001-4001-8001-000000000101",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-client-id",
+              "name": "client_id",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfg-client-secret",
+              "name": "client_secret",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfg-refresh-token",
+              "name": "refresh_token",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfg-folder-in",
+              "name": "folder_in",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "cfg-folder-out",
+              "name": "folder_out",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000102",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        260,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction assertObject(raw) {\n  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {\n    throw new Error('Config must be a JSON object with the keys from config.example.json.');\n  }\n}\n\nfunction readKeys(raw, keys, action) {\n  assertObject(raw);\n  const value = {};\n  const missing = [];\n  for (const key of keys) {\n    const current = raw[key];\n    if (typeof current !== 'string') {\n      missing.push(key);\n      continue;\n    }\n    const next = current.trim();\n    if (!next || next.startsWith('PASTE_')) missing.push(key);\n    else value[key] = next;\n  }\n  if (missing.length) {\n    throw new Error(`Config is incomplete. ${action} Missing or placeholder: ${missing.join(', ')}.`);\n  }\n  return value;\n}\n\nfunction assertFolderId(key, value) {\n  if (/^https?:\\/\\//i.test(value) || value.includes('/folders/')) {\n    throw new Error(\n      `${key} must be the Drive folder id, not the full URL. Copy the id after /folders/ in the address bar.`,\n    );\n  }\n  if (/[\\s'\"]/.test(value)) {\n    throw new Error(`${key} must be a Drive folder id with no spaces or quotes.`);\n  }\n}\n\nfunction driveQuery(folderId) {\n  const escaped = folderId.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, \"\\\\'\");\n  return `'${escaped}' in parents and mimeType = 'application/pdf' and trashed = false`;\n}\n\nfunction checkConfig(raw) {\n  const value = readKeys(\n    raw,\n    ['client_id', 'client_secret', 'refresh_token', 'folder_in', 'folder_out'],\n    'Fill config.json and run node n8n-resume-processor/scripts/apply-config.mjs, or paste the five values into the Config node.',\n  );\n  assertFolderId('folder_in', value.folder_in);\n  assertFolderId('folder_out', value.folder_out);\n  return {\n    ...value,\n    drive_query: driveQuery(value.folder_in),\n  };\n}\n\nconst checked = checkConfig($input.first().json);\nreturn [{ json: checked }];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000103",
+      "name": "Check Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "POST",
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_id",
+              "value": "={{ $json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000104",
+      "name": "Get Access Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "GET",
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $('Check Config').first().json.drive_query }}"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name,mimeType),nextPageToken"
+            },
+            {
+              "name": "pageSize",
+              "value": "1000"
+            },
+            {
+              "name": "orderBy",
+              "value": "name"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            },
+            {
+              "name": "includeItemsFromAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Get Access Token').first().json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body?.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body?.nextPageToken }}",
+              "limitPagesFetched": true,
+              "maxRequests": 20
+            }
+          }
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000105",
+      "name": "List PDFs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction collectFiles(pages) {\n  const files = [];\n  for (const page of pages) {\n    const list = page && Array.isArray(page.files) ? page.files : [];\n    for (const file of list) {\n      if (!file || typeof file.id !== 'string' || !file.id.trim()) continue;\n      if (file.mimeType !== 'application/pdf') continue;\n      files.push({\n        id: file.id.trim(),\n        name: typeof file.name === 'string' && file.name.trim() ? file.name.trim() : `${file.id.trim()}.pdf`,\n        mimeType: 'application/pdf',\n      });\n    }\n  }\n\n  const seen = new Set();\n  const unique = [];\n  for (const file of files) {\n    if (seen.has(file.id)) continue;\n    seen.add(file.id);\n    unique.push(file);\n  }\n  unique.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));\n  return { files: unique, count: unique.length };\n}\n\nconst pages = $input.all().map((item) => item.json);\nconst collected = collectFiles(pages);\nreturn [{ json: collected }];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000106",
+      "name": "Collect Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-has-pdfs",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000107",
+      "name": "Has PDFs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction emptyFolderReport(generatedAt) {\n  const output = [\n    'Batch resume extraction',\n    `Generated: ${generatedAt}`,\n    'Files: 0',\n    '',\n    'No PDF files were found in the input folder.',\n    'The search keeps files whose MIME type is application/pdf and that are not in the trash.',\n    '',\n  ].join('\\n');\n  return { output, count: 0 };\n}\n\nfunction generatedAtHKT() {\n  try {\n    return $now.setZone('Asia/Hong_Kong').toFormat('yyyy-LL-dd HH:mm') + ' HKT';\n  } catch (error) {\n    return new Date().toISOString();\n  }\n}\n\nreturn [{ json: emptyFolderReport(generatedAtHKT()) }];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000108",
+      "name": "Empty Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        820
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "files",
+        "include": "noOtherFields",
+        "options": {}
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000109",
+      "name": "Split Out",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        2100,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000110",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2380,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "GET",
+        "url": "={{ 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent($json.id) }}",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "alt",
+              "value": "media"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Get Access Token').first().json.access_token }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000111",
+      "name": "Download PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2700,
+        1100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {
+          "joinPages": true,
+          "keepSource": "json"
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000112",
+      "name": "Extract from File",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        3020,
+        1100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-has-text",
+              "leftValue": "={{ typeof $json.text === 'string' ? $json.text.trim().length : 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000113",
+      "name": "Has Text",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3320,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'File name: ' + ($json.name || 'unknown.pdf') + '\\n\\n' + (Array.isArray($json.text) ? $json.text.join('\\n\\n') : ($json.text || '')) }}",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "You extract three facts from one resume. Use only the resume text. Do not guess, and do not use tools.\n\nReturn plain text with these headings, in this order:\nName:\nEducation:\nWorking experience:\n\nRules:\n- Keep personal names, school names, and employer names in the script used on the resume. Do not translate them.\n- Keep the headings in English even when the resume is in Chinese.\n- Education: one line per credential, with the institution and dates when the resume includes them.\n- Working experience: one line per role, with the employer, title, and dates when the resume includes them.\n- If a section is missing, write \"Not found\" under that heading.\n- Do not add a preamble, a closing remark, or markdown fences.",
+          "maxIterations": 5
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000114",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        3640,
+        980
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "kimi-k3.1-pro",
+        "options": {
+          "temperature": 0,
+          "numCtx": 8192,
+          "numPredict": 2048,
+          "keepAlive": "30m"
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000115",
+      "name": "Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        3640,
+        1280
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction asMessage(error) {\n  const clip = (text) => {\n    const clean = stripSecrets(text).replace(/\\s+/g, ' ').trim();\n    if (clean.length <= 500) return clean;\n    return `${clean.slice(0, 499)}…`;\n  };\n  if (error == null) return 'Unknown error';\n  if (typeof error === 'string') return clip(error);\n  if (typeof error !== 'object') return clip(String(error));\n  const parts = [];\n  if (typeof error.message === 'string') parts.push(error.message);\n  if (typeof error.description === 'string') parts.push(error.description);\n  if (error.error && typeof error.error === 'object' && typeof error.error.message === 'string') {\n    parts.push(error.error.message);\n  }\n  if (parts.length) return clip(parts.join(' — '));\n  try {\n    return clip(JSON.stringify(error));\n  } catch {\n    return 'Unknown error';\n  }\n}\n\nfunction stripSecrets(text) {\n  return String(text)\n    .replace(/Bearer\\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')\n    .replace(/ya29\\.[A-Za-z0-9._-]+/g, '[redacted-access-token]');\n}\n\nfunction lookupFile(getNodeJson) {\n  const nodeNames = ['Split Out', 'Download PDF', 'Extract from File', 'Loop Over Items'];\n  let fileName = '';\n  let fileId = '';\n  for (const nodeName of nodeNames) {\n    let json;\n    try {\n      json = getNodeJson(nodeName);\n    } catch {\n      continue;\n    }\n    if (!json || typeof json !== 'object') continue;\n    if (!fileName && typeof json.name === 'string' && json.name.trim()) fileName = json.name.trim();\n    if (!fileName && typeof json.fileName === 'string' && json.fileName.trim()) {\n      fileName = json.fileName.trim();\n    }\n    if (!fileId && typeof json.id === 'string' && json.id.trim()) fileId = json.id.trim();\n    if (!fileId && typeof json.fileId === 'string' && json.fileId.trim()) fileId = json.fileId.trim();\n  }\n  return { fileName, fileId };\n}\n\nfunction skippedResume({ fileName, fileId, download, extracted }) {\n  const downloadError = download && download.error != null ? download.error : null;\n  const extractError = extracted && extracted.error != null ? extracted.error : null;\n  let output;\n  if (downloadError) {\n    output = `ERROR: Could not download the PDF. ${asMessage(downloadError)}`;\n  } else if (extractError) {\n    output = `ERROR: Could not extract text from the PDF. ${asMessage(extractError)}`;\n  } else {\n    output = 'No text could be extracted from this PDF. It may be scanned or image-only.';\n  }\n  return {\n    fileName: fileName || 'unknown.pdf',\n    fileId: fileId || '',\n    output,\n  };\n}\n\nfunction fileIdentity(incoming) {\n  const found = lookupFile((nodeName) => $(nodeName).item.json);\n  let fallback = 'unknown.pdf';\n  try {\n    if (typeof $itemIndex === 'number') fallback = 'resume-' + ($itemIndex + 1) + '.pdf';\n  } catch (error) {\n    fallback = 'unknown.pdf';\n  }\n  const incomingName = incoming && typeof incoming.name === 'string' ? incoming.name.trim() : '';\n  const incomingId = incoming && typeof incoming.id === 'string' ? incoming.id.trim() : '';\n  return {\n    fileName: found.fileName || incomingName || fallback,\n    fileId: found.fileId || incomingId,\n  };\n}\n\nfunction nodeJson(nodeName) {\n  try {\n    return $(nodeName).item.json;\n  } catch (error) {\n    return null;\n  }\n}\n\nconst incoming = $input.item.json;\nconst identity = fileIdentity(incoming);\nreturn [{\n  json: skippedResume({\n    fileName: identity.fileName,\n    fileId: identity.fileId,\n    download: nodeJson('Download PDF'),\n    extracted: nodeJson('Extract from File'),\n  }),\n}];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000116",
+      "name": "Skipped Resume",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3640,
+        1540
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction asMessage(error) {\n  const clip = (text) => {\n    const clean = stripSecrets(text).replace(/\\s+/g, ' ').trim();\n    if (clean.length <= 500) return clean;\n    return `${clean.slice(0, 499)}…`;\n  };\n  if (error == null) return 'Unknown error';\n  if (typeof error === 'string') return clip(error);\n  if (typeof error !== 'object') return clip(String(error));\n  const parts = [];\n  if (typeof error.message === 'string') parts.push(error.message);\n  if (typeof error.description === 'string') parts.push(error.description);\n  if (error.error && typeof error.error === 'object' && typeof error.error.message === 'string') {\n    parts.push(error.error.message);\n  }\n  if (parts.length) return clip(parts.join(' — '));\n  try {\n    return clip(JSON.stringify(error));\n  } catch {\n    return 'Unknown error';\n  }\n}\n\nfunction stripSecrets(text) {\n  return String(text)\n    .replace(/Bearer\\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')\n    .replace(/ya29\\.[A-Za-z0-9._-]+/g, '[redacted-access-token]');\n}\n\nfunction lookupFile(getNodeJson) {\n  const nodeNames = ['Split Out', 'Download PDF', 'Extract from File', 'Loop Over Items'];\n  let fileName = '';\n  let fileId = '';\n  for (const nodeName of nodeNames) {\n    let json;\n    try {\n      json = getNodeJson(nodeName);\n    } catch {\n      continue;\n    }\n    if (!json || typeof json !== 'object') continue;\n    if (!fileName && typeof json.name === 'string' && json.name.trim()) fileName = json.name.trim();\n    if (!fileName && typeof json.fileName === 'string' && json.fileName.trim()) {\n      fileName = json.fileName.trim();\n    }\n    if (!fileId && typeof json.id === 'string' && json.id.trim()) fileId = json.id.trim();\n    if (!fileId && typeof json.fileId === 'string' && json.fileId.trim()) fileId = json.fileId.trim();\n  }\n  return { fileName, fileId };\n}\n\nfunction shapedResume({ fileName, fileId, incoming }) {\n  if (incoming && incoming.error != null) {\n    return {\n      fileName: fileName || 'unknown.pdf',\n      fileId: fileId || '',\n      output: `ERROR: The model did not return an extraction. ${asMessage(incoming.error)}`,\n    };\n  }\n  const text = incoming && typeof incoming.output === 'string' ? incoming.output.trim() : '';\n  return {\n    fileName: fileName || 'unknown.pdf',\n    fileId: fileId || '',\n    output: text || 'The model returned an empty response for this resume.',\n  };\n}\n\nfunction fileIdentity(incoming) {\n  const found = lookupFile((nodeName) => $(nodeName).item.json);\n  let fallback = 'unknown.pdf';\n  try {\n    if (typeof $itemIndex === 'number') fallback = 'resume-' + ($itemIndex + 1) + '.pdf';\n  } catch (error) {\n    fallback = 'unknown.pdf';\n  }\n  const incomingName = incoming && typeof incoming.name === 'string' ? incoming.name.trim() : '';\n  const incomingId = incoming && typeof incoming.id === 'string' ? incoming.id.trim() : '';\n  return {\n    fileName: found.fileName || incomingName || fallback,\n    fileId: found.fileId || incomingId,\n  };\n}\n\nfunction nodeJson(nodeName) {\n  try {\n    return $(nodeName).item.json;\n  } catch (error) {\n    return null;\n  }\n}\n\nconst incoming = $input.item.json;\nconst identity = fileIdentity(incoming);\nreturn [{\n  json: shapedResume({\n    fileName: identity.fileName,\n    fileId: identity.fileId,\n    incoming,\n  }),\n}];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000117",
+      "name": "Shape Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        980
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction aggregateResumes(items, generatedAt) {\n  const section = (item, index) => {\n    const name = item.fileName || `resume-${index + 1}.pdf`;\n    const fileId = item.fileId ? `Drive file id: ${item.fileId}\\n` : '';\n    const body = typeof item.output === 'string' && item.output.trim() ? item.output.trim() : '(empty model output)';\n    return `===== ${name} =====\\n${fileId}\\n${body}`;\n  };\n  const sections = items.map(section);\n  const output = [\n    'Batch resume extraction',\n    `Generated: ${generatedAt}`,\n    `Files: ${items.length}`,\n    '',\n    sections.join('\\n\\n'),\n    '',\n  ].join('\\n');\n  return { output, count: items.length };\n}\n\nfunction generatedAtHKT() {\n  try {\n    return $now.setZone('Asia/Hong_Kong').toFormat('yyyy-LL-dd HH:mm') + ' HKT';\n  } catch (error) {\n    return new Date().toISOString();\n  }\n}\n\nconst items = $input.all().map((item) => item.json);\nreturn [{ json: aggregateResumes(items, generatedAtHKT()) }];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000118",
+      "name": "Aggregate Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        1860
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "output",
+        "binaryPropertyName": "data",
+        "options": {
+          "fileName": "result.txt",
+          "encoding": "utf8"
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000119",
+      "name": "Convert to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2700,
+        1860
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Generated from n8n-resume-processor/lib. Edit the lib, then run scripts/build-workflow.mjs.\nfunction buildMultipart({ text, folderOut, boundary }) {\n  if (typeof folderOut !== 'string' || !folderOut.trim()) {\n    throw new Error('Config folder_out is empty. Set the Google Drive output folder id.');\n  }\n  if (typeof text !== 'string') {\n    throw new Error('Resume report text is missing.');\n  }\n  if (text.includes(boundary)) {\n    throw new Error('The resume report contains the multipart boundary, so the upload body would be invalid.');\n  }\n  const metadata = JSON.stringify({\n    name: 'result.txt',\n    parents: [folderOut.trim()],\n    mimeType: 'text/plain',\n  });\n  const payload =\n    `--${boundary}\\r\\n` +\n    'Content-Type: application/json; charset=UTF-8\\r\\n\\r\\n' +\n    `${metadata}\\r\\n` +\n    `--${boundary}\\r\\n` +\n    'Content-Type: text/plain; charset=UTF-8\\r\\n\\r\\n' +\n    `${text}\\r\\n` +\n    `--${boundary}--\\r\\n`;\n  return {\n    payload,\n    fileName: 'result.txt',\n    contentType: `multipart/related; boundary=${boundary}`,\n  };\n}\n\nfunction readReportText(readNode) {\n  const names = ['Aggregate Output', 'Empty Result'];\n  for (const name of names) {\n    try {\n      const output = readNode(name);\n      if (typeof output === 'string') return output;\n    } catch {\n      // The other branch did not run.\n    }\n  }\n  throw new Error('No aggregated resume text was produced.');\n}\n\nconst text = readReportText((nodeName) => $(nodeName).first().json.output);\nconst folderOut = $('Check Config').first().json.folder_out;\nconst built = buildMultipart({\n  text,\n  folderOut,\n  boundary: 'n8n_resume_boundary_7f3a9c',\n});\nconst binary = await this.helpers.prepareBinaryData(\n  Buffer.from(built.payload, 'utf8'),\n  built.fileName,\n  built.contentType,\n);\nreturn [{\n  json: {\n    fileName: built.fileName,\n    contentType: built.contentType,\n    bytes: Buffer.byteLength(built.payload, 'utf8'),\n  },\n  binary: { data: binary },\n}];\n"
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000120",
+      "name": "Build Multipart Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3040,
+        1860
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "none",
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/drive/v3/files",
+        "sendQuery": true,
+        "specifyQuery": "keypair",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "uploadType",
+              "value": "multipart"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Get Access Token').first().json.access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "multipart/related; boundary=n8n_resume_boundary_7f3a9c"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "b1e0a001-0001-4001-8001-000000000121",
+      "name": "Upload result.txt",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3380,
+        1860
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Check Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Config": {
+      "main": [
+        [
+          {
+            "node": "Get Access Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Access Token": {
+      "main": [
+        [
+          {
+            "node": "List PDFs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List PDFs": {
+      "main": [
+        [
+          {
+            "node": "Collect Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Files": {
+      "main": [
+        [
+          {
+            "node": "Has PDFs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has PDFs": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Empty Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Empty Result": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Has Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Text": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skipped Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Shape Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skipped Resume": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Result": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Output": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Build Multipart Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Multipart Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload result.txt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
