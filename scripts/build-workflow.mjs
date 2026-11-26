@@ -488,14 +488,14 @@ return [{ json: emptyFolderReport(generatedAtHKT()) }];`,
 
 const incoming = $input.item.json;
 const identity = fileIdentity(incoming);
-return [{
+return {
   json: skippedResume({
     fileName: identity.fileName,
     fileId: identity.fileId,
     download: nodeJson('Download PDF'),
     extracted: nodeJson('Extract from File'),
   }),
-}];`,
+};`,
       ),
     }),
     codeNode({
@@ -509,13 +509,13 @@ return [{
 
 const incoming = $input.item.json;
 const identity = fileIdentity(incoming);
-return [{
+return {
   json: shapedResume({
     fileName: identity.fileName,
     fileId: identity.fileId,
     incoming,
   }),
-}];`,
+};`,
       ),
     }),
     codeNode({

@@ -368,19 +368,19 @@ test('code nodes run with the same helpers n8n will call', async () => {
     $: (name) => ({ item: { json: nodes[name] } }),
     $itemIndex: 0,
   });
-  assert.equal(skipped[0].json.fileName, 'ada-ng.pdf');
-  assert.match(skipped[0].json.output, /Could not download/);
-  assert.doesNotMatch(skipped[0].json.output, /ya29/);
+  assert.equal(skipped.json.fileName, 'ada-ng.pdf');
+  assert.match(skipped.json.output, /Could not download/);
+  assert.doesNotMatch(skipped.json.output, /ya29/);
 
   const shaped = await runCodeWithThis(code('Shape Result'), {
     $input: { item: { json: { output: 'Name:\nAda Ng' } } },
     $: (name) => ({ item: { json: name === 'Split Out' ? { name: 'ada-ng.pdf', id: 'file-1' } : {} } }),
     $itemIndex: 0,
   });
-  assert.equal(shaped[0].json.output, 'Name:\nAda Ng');
+  assert.equal(shaped.json.output, 'Name:\nAda Ng');
 
   const aggregate = await runCodeWithThis(code('Aggregate Output'), {
-    $input: { all: () => [{ json: shaped[0].json }, { json: skipped[0].json }] },
+    $input: { all: () => [{ json: shaped.json }, { json: skipped.json }] },
     $now: now,
   });
   assert.match(aggregate[0].json.output, /Files: 2/);
