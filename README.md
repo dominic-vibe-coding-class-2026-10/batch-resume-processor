@@ -4,7 +4,7 @@ An n8n workflow that reads PDFs from a Google Drive folder, asks an Ollama model
 
 Google is called with HTTP Request nodes and a refresh token. The workflow does not store a Google Drive credential in n8n.
 
-Import `workflows/batch-resume-processor.json` on n8n 1.99 or newer (AI Agent node 3.1). n8n 2.x is the better fit.
+Import `workflows/batch-resume-processor.json` on n8n 1.99 or newer (AI Agent node 3.1). n8n 2.x is the better fit. `manifest.md` is the zero-shot build and the n8n proof. Follow that file instead of improvising the Google redirect or the publish call.
 
 ## What you need
 
@@ -24,9 +24,11 @@ While the OAuth consent screen is in **Testing**, Google expires refresh tokens 
 cp n8n-resume-processor/config.example.json n8n-resume-processor/config.json
 ```
 
-`config.json` is gitignored. Fill `client_id` and `client_secret` first. On the OAuth client, add this authorized redirect URI:
+`config.json` is gitignored. Fill `client_id` and `client_secret` first. On the OAuth client, add this authorized redirect URI before using the local script:
 
 `http://127.0.0.1:53682/callback`
+
+If Google returns `redirect_uri_mismatch`, that URI is not registered. `manifest.md` has the OAuth Playground redirect this client already accepts.
 
 Then mint the refresh token. The script listens on `127.0.0.1:53682`, prints the consent URL, and writes `refresh_token` into `config.json`. It does not print the token.
 
